@@ -454,45 +454,66 @@
                 avc: { format: 'avc' } // CRITICAL: Forces AVC format required by mp4-muxer on Safari/WebKit
             };
 
-            // Safely check if the sandbox supports the Main Profile, if not, fallback to Baseline
-            try {
-                const support = await VideoEncoder.isConfigSupported(config);
-                if (!support.supported) {
-                    console.warn("Main profile not supported, falling back to Baseline...");
-                    config.codec = 'avc1.42002A'; // Baseline Profile
-                }
-            } catch (e) {
-                console.warn("Codec support check failed, attempting default config.");
-            }
-
+            // Remove the await VideoEncoder.isConfigSupported() check.
+            // Online viewers and strict sandboxes often cause that Promise to hang forever, freezing the app at 0%.
+            // Instead, we will directly attempt configuration and fallback if it throws.
             try {
                 videoEncoder.configure(config);
             } catch (e) {
-                showError("Encoder configuration rejected by browser: " + e.message);
-                return;
+                console.warn("Main profile rejected, falling back to Baseline...", e);
+                config.codec = 'avc1.42002A'; // Baseline Profile
+                try {
+                    videoEncoder.configure(config);
+                } catch (e2) {
+                    console.warn("Baseline 1080p rejected, falling back to 720p Compatibility Mode...", e2);
+                    config.codec = 'avc1.42E01E'; // Baseline Profile Level 3.0 (Super compatible)
+                    config.width = 1280; // Scale down for hardware compatibility
+                    config.height = 720;
+                    config.bitrate = 3_000_000;
+                    DOM.exportStatus.textContent = "Encoding Fast MP4 (720p Compatibility Mode)...";
+                    try {
+                        videoEncoder.configure(config);
+                    } catch (e3) {
+                        showError("Encoder configuration rejected by your device hardware: " + e3.message);
+                        return;
+                    }
+                }
             }
 
             const transitionTimeMs = 1500;
             let currentFrame = 0;
             let hasError = false;
+            let stallCount = 0; // Track if the encoder freezes
 
             // Non-blocking processing loop
             const processChunk = async () => {
                 if (hasError) return; // Halt if an error occurred
 
                 try {
+                    // Safety check if encoder died silently
+                    if (videoEncoder.state !== 'configured') {
+                        showError("Video encoder crashed. The sandbox may be blocking hardware acceleration.");
+                        hasError = true; return;
+                    }
+
                     // Prevent memory overflow by waiting if the encoder queue is full
-                    if (videoEncoder.encodeQueueSize > 30) {
+                    if (videoEncoder.encodeQueueSize > 10) {
+                        stallCount++;
+                        if (stallCount > 150) {
+                             showError("Encoder stalled completely. Your device or browser is blocking hardware video processing.");
+                             hasError = true; return;
+                        }
                         setTimeout(processChunk, 50); // Yield to event loop, wait 50ms for encoder to catch up
                         return; 
                     }
+                    stallCount = 0; // Reset stall tracker since queue is draining
 
-                    const framesPerChunk = 15; // Process 15 frames per tick before yielding
+                    const framesPerChunk = 5; // Reduced frames per tick to prevent browser memory crashes
                     
                     for (let i = 0; i < framesPerChunk && currentFrame < totalFrames; i++) {
                         
                         // If queue fills up mid-chunk, break loop but allow setTimeout below to schedule next tick
-                        if (videoEncoder.encodeQueueSize > 30) {
+                        if (videoEncoder.encodeQueueSize > 10) {
                             break; 
                         }
 
@@ -541,7 +562,8 @@
                         }
                         
                         // Create VideoFrame from Canvas
-                        const frame = new VideoFrame(cvs, { timestamp: currentFrame * 1000000 / fps });
+                        // CRITICAL FIX: Math.round() prevents decimal timestamp errors which crash WebCodecs on strict devices.
+                        const frame = new VideoFrame(cvs, { timestamp: Math.round((currentFrame * 1000000) / fps) });
                         const isKeyFrame = (currentFrame % (fps * 2) === 0); // Keyframe every 2 seconds
                         
                         try {
