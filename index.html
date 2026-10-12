@@ -1,0 +1,633 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Instant Memorial Video Generator</title>
+    
+    <!-- Load Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- Load Google Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600&family=Lora:ital,wght@0,400;0,500;1,400&display=swap" rel="stylesheet">
+    
+    <!-- Load mp4-muxer for MP4 Packaging -->
+    <script src="https://unpkg.com/mp4-muxer/build/mp4-muxer.js"></script>
+
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        brandGold: '#D4AF37',
+                        glassBg: 'rgba(15, 15, 20, 0.85)',
+                        glassBorder: 'rgba(255, 255, 255, 0.1)'
+                    },
+                    fontFamily: {
+                        serif: ['Cinzel', 'serif'],
+                        body: ['Lora', 'serif'],
+                    }
+                }
+            }
+        }
+    </script>
+
+    <style>
+        body {
+            background-color: #050505;
+            background-image: radial-gradient(circle at center, #1a1a24 0%, #000000 100%);
+            color: #f3f4f6;
+            margin: 0;
+            overflow: hidden;
+            font-family: 'Lora', serif;
+        }
+
+        /* Frosted Glass UI */
+        .glass-panel {
+            background: var(--tw-colors-glassBg);
+            backdrop-filter: blur(25px);
+            -webkit-backdrop-filter: blur(25px);
+            border: 1px solid var(--tw-colors-glassBorder);
+            box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.9);
+        }
+
+        .file-upload-wrapper {
+            position: relative;
+            overflow: hidden;
+            border: 1px dashed rgba(212, 175, 55, 0.4);
+            background: rgba(0, 0, 0, 0.5);
+            transition: all 0.3s ease;
+            cursor: pointer;
+        }
+        .file-upload-wrapper:hover {
+            border-style: solid;
+            border-color: #D4AF37;
+            background: rgba(212, 175, 55, 0.15);
+        }
+        .file-upload-wrapper input[type="file"] {
+            position: absolute; inset: 0;
+            width: 100%; height: 100%;
+            opacity: 0; cursor: pointer; z-index: 10;
+        }
+
+        /* Export Screen */
+        #export-screen {
+            position: fixed; inset: 0;
+            background-color: #050505; z-index: 50;
+            opacity: 0; visibility: hidden;
+            transition: opacity 0.5s ease, visibility 0.5s ease;
+            display: flex; align-items: center; justify-content: center;
+            flex-direction: column;
+        }
+        #export-screen.active {
+            opacity: 1; visibility: visible;
+        }
+
+        /* Hidden rendering canvas */
+        #render-canvas {
+            display: none;
+        }
+
+        .spinner {
+            width: 50px; height: 50px;
+            border: 3px solid rgba(212, 175, 55, 0.2);
+            border-radius: 50%;
+            border-top-color: #D4AF37;
+            animation: spin 1s linear infinite;
+        }
+        @keyframes spin { to { transform: rotate(360deg); } }
+    </style>
+</head>
+<body class="antialiased min-h-screen flex items-center justify-center p-4">
+
+    <div id="setup-screen" class="w-full max-w-4xl glass-panel rounded-2xl p-8 transition-all duration-500 z-10 relative overflow-y-auto max-h-[95vh]">
+        <div class="text-center mb-8">
+            <h1 class="font-serif text-3xl sm:text-4xl text-brandGold mb-2 tracking-wide">Instant Memorial Video</h1>
+            <p class="font-body text-gray-400 text-sm tracking-widest uppercase opacity-80">Offline Rendering Engine &bull; MP4 Export</p>
+            <div class="w-16 h-px bg-brandGold mx-auto mt-4 opacity-30"></div>
+        </div>
+
+        <div id="duplicate-alert" class="hidden mb-6 bg-yellow-900/40 border border-yellow-600/50 text-yellow-200 p-4 rounded-lg text-sm text-center font-body shadow-lg">
+            <!-- Alert text injected here -->
+        </div>
+
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-5">
+            <div class="md:col-span-2">
+                <label class="block font-serif text-lg text-gray-200 mb-1">1. Title Slide Image</label>
+                <div class="file-upload-wrapper rounded-xl p-5 text-center">
+                    <input type="file" id="title-upload" accept="image/*" />
+                    <span id="title-label" class="text-gray-300">Select Title Image...</span>
+                </div>
+            </div>
+
+            <div class="md:col-span-2">
+                <label class="block font-serif text-lg text-gray-200 mb-1">2. Tribute Photos</label>
+                <p class="text-gray-500 text-xs mb-2">Duplicates (by name/visuals) and uniform borders will be auto-removed.</p>
+                <div class="file-upload-wrapper rounded-xl p-5 text-center">
+                    <input type="file" id="photo-upload" accept="image/*" multiple />
+                    <span id="photo-label" class="text-gray-300">Browse Multiple Photos...</span>
+                </div>
+            </div>
+            
+            <div class="md:col-span-2 flex flex-col items-center justify-center pt-4">
+                 <button id="export-btn" class="w-full h-14 bg-brandGold hover:bg-yellow-500 text-black font-serif text-lg tracking-widest transition-all rounded-lg shadow-[0_0_15px_rgba(212,175,55,0.3)]">
+                    START INSTANT RENDER
+                </button>
+                <p id="error-msg" class="text-red-400 mt-3 text-center text-sm hidden"></p>
+                <p class="text-gray-500 text-xs mt-3 text-center w-3/4">Video length is automatically set to exactly 11 minutes and 21 seconds (681s). Audio tracks should be added in your editing software later.</p>
+            </div>
+        </div>
+    </div>
+
+    <div id="export-screen">
+        <div class="spinner mb-6"></div>
+        <h2 class="font-serif text-3xl text-brandGold mb-2 tracking-wider">Fast Rendering Video</h2>
+        <p id="export-status" class="text-gray-400 text-sm tracking-widest uppercase mb-8">Preparing Media Assets...</p>
+        
+        <div class="w-80 max-w-[80vw] h-2 bg-gray-800 rounded-full overflow-hidden shadow-inner relative">
+            <div id="export-progress-bar" class="h-full bg-brandGold w-0 transition-all duration-150 relative shadow-[0_0_10px_rgba(212,175,55,0.8)]"></div>
+        </div>
+        <p id="export-percentage" class="mt-4 text-brandGold font-serif text-xl">0%</p>
+        
+        <p class="mt-8 text-gray-500 text-xs italic font-body max-w-md text-center bg-gray-900/50 p-4 rounded border border-gray-800">
+            Utilizing WebCodecs API for offline rendering.<br>Generating 20,430 frames as fast as your CPU allows.
+        </p>
+    </div>
+    
+    <canvas id="render-canvas" width="1920" height="1080"></canvas>
+
+    <script>
+        const DOM = {
+            title: document.getElementById('title-upload'),
+            photos: document.getElementById('photo-upload'),
+            exportBtn: document.getElementById('export-btn'),
+            errorMsg: document.getElementById('error-msg'),
+            setupScreen: document.getElementById('setup-screen'),
+            exportScreen: document.getElementById('export-screen'),
+            exportStatus: document.getElementById('export-status'),
+            exportProgressBar: document.getElementById('export-progress-bar'),
+            exportPercentage: document.getElementById('export-percentage'),
+            duplicateAlert: document.getElementById('duplicate-alert'),
+            canvas: document.getElementById('render-canvas')
+        };
+
+        const state = {
+            titleFile: null,
+            photoFiles: [],
+            timeline: [], 
+            totalDurationMs: 681000 // 681 seconds exactly
+        };
+
+        // Perceptual hashing (dHash) for Duplicate Detection
+        async function getDHash(file) {
+            return new Promise((resolve) => {
+                const img = new Image();
+                img.onload = () => {
+                    const size = 8;
+                    const cvs = document.createElement('canvas');
+                    cvs.width = size + 1; cvs.height = size;
+                    const ctx = cvs.getContext('2d', { willReadFrequently: true });
+                    ctx.drawImage(img, 0, 0, size + 1, size);
+                    
+                    const data = ctx.getImageData(0, 0, size + 1, size).data;
+                    let hash = '';
+                    for (let y = 0; y < size; y++) {
+                        for (let x = 0; x < size; x++) {
+                            const i1 = (y * (size + 1) + x) * 4;
+                            const i2 = (y * (size + 1) + (x + 1)) * 4;
+                            const gray1 = (data[i1] + data[i1+1] + data[i1+2]) / 3;
+                            const gray2 = (data[i2] + data[i2+1] + data[i2+2]) / 3;
+                            hash += gray1 < gray2 ? '1' : '0';
+                        }
+                    }
+                    resolve(hash);
+                };
+                img.src = URL.createObjectURL(file);
+            });
+        }
+
+        function getHammingDistance(h1, h2) {
+            let dist = 0;
+            for (let i = 0; i < h1.length; i++) if (h1[i] !== h2[i]) dist++;
+            return dist;
+        }
+
+        DOM.title.addEventListener('change', e => {
+            if(e.target.files[0]) {
+                state.titleFile = e.target.files[0];
+                document.getElementById('title-label').textContent = state.titleFile.name;
+                document.getElementById('title-label').classList.add('text-brandGold');
+            }
+        });
+        
+        DOM.photos.addEventListener('change', async e => {
+            if(!e.target.files.length) return;
+            
+            const files = Array.from(e.target.files);
+            const uniqueFiles = [];
+            const seenNames = new Set();
+            const seenHashes = [];
+            let duplicateCount = 0;
+
+            document.getElementById('photo-label').textContent = "Scanning for duplicates...";
+            DOM.duplicateAlert.classList.add('hidden');
+
+            for (const file of files) {
+                if (seenNames.has(file.name)) { duplicateCount++; continue; }
+                const hash = await getDHash(file);
+                let isDuplicate = false;
+                for (const seenHash of seenHashes) {
+                    if (getHammingDistance(hash, seenHash) < 10) { isDuplicate = true; break; }
+                }
+                if (isDuplicate) {
+                    duplicateCount++;
+                } else {
+                    seenNames.add(file.name); seenHashes.push(hash); uniqueFiles.push(file);
+                }
+            }
+
+            state.photoFiles = uniqueFiles;
+            document.getElementById('photo-label').textContent = `${state.photoFiles.length} Unique Photos Selected`;
+            document.getElementById('photo-label').classList.add('text-brandGold');
+
+            if (duplicateCount > 0) {
+                DOM.duplicateAlert.textContent = `Scanned successfully. Removed ${duplicateCount} duplicate or highly similar images.`;
+                DOM.duplicateAlert.classList.remove('hidden');
+            }
+        });
+
+        function showError(msg) {
+            DOM.errorMsg.textContent = msg;
+            DOM.errorMsg.classList.remove('hidden');
+            
+            // Ensure the error is visible even if we are on the export screen
+            if (DOM.exportScreen.classList.contains('active')) {
+                DOM.exportStatus.innerHTML = `<span class="text-red-500 font-bold">Error:</span> ${msg}`;
+                DOM.exportStatus.classList.remove('text-gray-400');
+                DOM.exportProgressBar.classList.remove('bg-brandGold');
+                DOM.exportProgressBar.classList.add('bg-red-500');
+            }
+        }
+
+        // Smart Crop 
+        function processImageAndCrop(file, skipCrop) {
+            return new Promise((resolve, reject) => {
+                const img = new Image();
+                img.onload = () => {
+                    const cvs = document.createElement('canvas');
+                    cvs.width = img.width; cvs.height = img.height;
+                    const ctx = cvs.getContext('2d', { willReadFrequently: true });
+                    ctx.drawImage(img, 0, 0);
+                    
+                    if (skipCrop) { resolve(cvs); return; }
+
+                    const idata = ctx.getImageData(0,0, cvs.width, cvs.height);
+                    const data = idata.data;
+                    const w = cvs.width, h = cvs.height;
+
+                    const isUniform = (startX, startY, dX, dY, length) => {
+                        let r0 = data[(startY * w + startX)*4];
+                        let g0 = data[(startY * w + startX)*4 + 1];
+                        let b0 = data[(startY * w + startX)*4 + 2];
+                        
+                        if (Math.max(r0,g0,b0) - Math.min(r0,g0,b0) > 30) return false;
+                        
+                        const step = Math.max(1, Math.floor(length/50));
+                        for(let i = 0; i < length; i += step) {
+                            let idx = ((startY + dY*i) * w + (startX + dX*i)) * 4;
+                            if (Math.abs(data[idx]-r0)>20 || Math.abs(data[idx+1]-g0)>20 || Math.abs(data[idx+2]-b0)>20) return false;
+                        }
+                        return true;
+                    };
+
+                    let top = 0, bottom = h-1, left = 0, right = w-1;
+                    while(top < h/3 && isUniform(0, top, 1, 0, w)) top++;
+                    while(bottom > h*2/3 && isUniform(0, bottom, 1, 0, w)) bottom--;
+                    while(left < w/3 && isUniform(left, 0, 0, 1, h)) left++;
+                    while(right > w*2/3 && isUniform(right, 0, 0, 1, h)) right--;
+
+                    if (top === 0 && bottom === h-1 && left === 0 && right === w-1) { resolve(cvs); return; }
+                    
+                    const croppedCvs = document.createElement('canvas');
+                    croppedCvs.width = right - left + 1; croppedCvs.height = bottom - top + 1;
+                    const cctx = croppedCvs.getContext('2d');
+                    cctx.drawImage(cvs, left, top, croppedCvs.width, croppedCvs.height, 0, 0, croppedCvs.width, croppedCvs.height);
+                    resolve(croppedCvs);
+                };
+                img.onerror = reject;
+                img.src = URL.createObjectURL(file);
+            });
+        }
+
+        // Memory Efficient Pre-rendering: Stores the sharp FG, and creates a tiny heavily blurred BG
+        // that takes almost zero RAM. We will scale the tiny BG up during frame rendering.
+        function generateSlideAssets(sourceCanvas) {
+            const tinyBg = document.createElement('canvas');
+            // 192x108 is exactly 1/10th of 1080p, uses negligible memory
+            tinyBg.width = 192; tinyBg.height = 108;
+            const tctx = tinyBg.getContext('2d');
+            
+            tctx.filter = 'blur(4px)'; // Will look heavily blurred when upscaled 10x
+            const scaleCover = Math.max(192 / sourceCanvas.width, 108 / sourceCanvas.height) * 1.1;
+            const coverW = sourceCanvas.width * scaleCover;
+            const coverH = sourceCanvas.height * scaleCover;
+            tctx.drawImage(sourceCanvas, (192 - coverW) / 2, (108 - coverH) / 2, coverW, coverH);
+
+            return {
+                fg: sourceCanvas,
+                bg: tinyBg
+            };
+        }
+
+        DOM.exportBtn.addEventListener('click', async () => {
+            if(!window.VideoEncoder) {
+                showError("Your browser or this online viewer does not support the WebCodecs API required for fast rendering. Please save this code as an .html file on your computer and open it directly in Chrome or Edge.");
+                return;
+            }
+            if(!state.titleFile || !state.photoFiles.length) {
+                showError("Please upload a Title slide and at least one Photo.");
+                return;
+            }
+
+            DOM.errorMsg.classList.add('hidden');
+            DOM.setupScreen.style.opacity = '0';
+            setTimeout(() => {
+                DOM.setupScreen.style.display = 'none';
+                DOM.exportScreen.classList.add('active');
+            }, 500);
+
+            try {
+                // Timeline Configuration (Hardcoded to 681 seconds)
+                const totalAudioMs = state.totalDurationMs; // 681000
+                const introMs = 15000;
+                const outroMs = 15000;
+                const transitionMs = 1500; 
+                const remainingMs = totalAudioMs - (introMs + outroMs);
+                const msPerPhoto = remainingMs / state.photoFiles.length;
+                state.timeline = [];
+
+                DOM.exportStatus.textContent = "Processing Title Slide...";
+                const titleSource = await processImageAndCrop(state.titleFile, true);
+                const titleAssets = generateSlideAssets(titleSource);
+                
+                state.timeline.push({
+                    assets: titleAssets,
+                    startMs: 0,
+                    endMs: introMs + transitionMs 
+                });
+
+                for (let i = 0; i < state.photoFiles.length; i++) {
+                    DOM.exportStatus.textContent = `Cropping & Processing Image ${i+1} of ${state.photoFiles.length}...`;
+                    const photoSource = await processImageAndCrop(state.photoFiles[i], false);
+                    const photoAssets = generateSlideAssets(photoSource);
+                    
+                    const start = introMs + (i * msPerPhoto);
+                    state.timeline.push({
+                        assets: photoAssets,
+                        startMs: start,
+                        endMs: start + msPerPhoto + transitionMs
+                    });
+                    
+                    // Update small progress
+                    DOM.exportProgressBar.style.width = `${((i+1)/state.photoFiles.length)*10}%`;
+                }
+
+                state.timeline.push({
+                    assets: titleAssets, // reuse title assets
+                    startMs: totalAudioMs - outroMs,
+                    endMs: totalAudioMs
+                });
+
+                startWebCodecsEngine();
+
+            } catch (err) {
+                console.error(err);
+                alert(err.message || "An error occurred during asset processing.");
+                window.location.reload();
+            }
+        });
+
+        async function startWebCodecsEngine() {
+            DOM.exportStatus.textContent = "Encoding Fast MP4...";
+            
+            const fps = 30;
+            const targetW = 1920;
+            const targetH = 1080;
+            const totalFrames = Math.ceil(state.totalDurationMs * fps / 1000); // ~20,430 frames
+            
+            const cvs = DOM.canvas;
+            const ctx = cvs.getContext('2d', { alpha: false });
+
+            // Initialize mp4-muxer
+            const muxer = new Mp4Muxer.Muxer({
+                target: new Mp4Muxer.ArrayBufferTarget(),
+                video: {
+                    codec: 'avc',
+                    width: targetW,
+                    height: targetH
+                },
+                fastStart: 'in-memory'
+            });
+
+            let encodedChunkCount = 0;
+
+            // Initialize WebCodecs VideoEncoder
+            const videoEncoder = new VideoEncoder({
+                output: (chunk, meta) => {
+                    encodedChunkCount++;
+                    muxer.addVideoChunk(chunk, meta);
+                },
+                error: (e) => {
+                    console.error("VideoEncoder Error:", e);
+                    showError("Encoder Error: " + e.message);
+                }
+            });
+
+            let config = {
+                codec: 'avc1.4D002A', // Main Profile Level 4.2 (Highly compatible for 1080p30)
+                width: targetW,
+                height: targetH,
+                bitrate: 6_000_000, // 6 Mbps for decent quality 1080p
+                framerate: fps,
+                avc: { format: 'avc' } // CRITICAL: Forces AVC format required by mp4-muxer on Safari/WebKit
+            };
+
+            // Safely check if the sandbox supports the Main Profile, if not, fallback to Baseline
+            try {
+                const support = await VideoEncoder.isConfigSupported(config);
+                if (!support.supported) {
+                    console.warn("Main profile not supported, falling back to Baseline...");
+                    config.codec = 'avc1.42002A'; // Baseline Profile
+                }
+            } catch (e) {
+                console.warn("Codec support check failed, attempting default config.");
+            }
+
+            try {
+                videoEncoder.configure(config);
+            } catch (e) {
+                showError("Encoder configuration rejected by browser: " + e.message);
+                return;
+            }
+
+            const transitionTimeMs = 1500;
+            let currentFrame = 0;
+            let hasError = false;
+
+            // Non-blocking processing loop
+            const processChunk = async () => {
+                if (hasError) return; // Halt if an error occurred
+
+                try {
+                    // Prevent memory overflow by waiting if the encoder queue is full
+                    if (videoEncoder.encodeQueueSize > 30) {
+                        setTimeout(processChunk, 50); // Yield to event loop, wait 50ms for encoder to catch up
+                        return; 
+                    }
+
+                    const framesPerChunk = 15; // Process 15 frames per tick before yielding
+                    
+                    for (let i = 0; i < framesPerChunk && currentFrame < totalFrames; i++) {
+                        
+                        // If queue fills up mid-chunk, break loop but allow setTimeout below to schedule next tick
+                        if (videoEncoder.encodeQueueSize > 30) {
+                            break; 
+                        }
+
+                        const elapsedMs = (currentFrame * 1000) / fps;
+                        
+                        // 1. Clear Canvas
+                        ctx.globalAlpha = 1.0;
+                        ctx.fillStyle = '#000';
+                        ctx.fillRect(0, 0, targetW, targetH);
+                        
+                        // 2. Find active slides for this exact millisecond
+                        const activeSlides = state.timeline.filter(s => elapsedMs >= s.startMs && elapsedMs < s.endMs);
+                        activeSlides.sort((a, b) => a.startMs - b.startMs);
+
+                        for (let j = 0; j < activeSlides.length; j++) {
+                            const slide = activeSlides[j];
+                            const assets = slide.assets;
+                            
+                            // Crossfade logic
+                            let alpha = 1.0;
+                            if (j > 0) { // If it's a new slide layering on top
+                                let fadeProgress = (elapsedMs - slide.startMs) / transitionTimeMs;
+                                alpha = Math.max(0, Math.min(1, fadeProgress));
+                            }
+                            ctx.globalAlpha = alpha;
+                            
+                            // Draw blurred BG
+                            ctx.filter = 'blur(40px) brightness(0.3)';
+                            const scaleCover = Math.max(targetW / assets.bg.width, targetH / assets.bg.height) * 1.1;
+                            const coverW = assets.bg.width * scaleCover;
+                            const coverH = assets.bg.height * scaleCover;
+                            ctx.drawImage(assets.bg, (targetW - coverW) / 2, (targetH - coverH) / 2, coverW, coverH);
+                            ctx.filter = 'none';
+                            
+                            // Draw sharp FG with subtle Ken Burns zoom
+                            const scaleContain = Math.min(targetW / assets.fg.width, targetH / assets.fg.height);
+                            const localElapsed = elapsedMs - slide.startMs;
+                            const visibleDur = slide.endMs - slide.startMs;
+                            
+                            const zoomFactor = 1.0 + Math.max(0, Math.min(1, localElapsed / visibleDur)) * 0.05;
+                            const finalScale = scaleContain * zoomFactor;
+                            const containW = assets.fg.width * finalScale;
+                            const containH = assets.fg.height * finalScale;
+                            
+                            ctx.drawImage(assets.fg, (targetW - containW) / 2, (targetH - containH) / 2, containW, containH);
+                        }
+                        
+                        // Create VideoFrame from Canvas
+                        const frame = new VideoFrame(cvs, { timestamp: currentFrame * 1000000 / fps });
+                        const isKeyFrame = (currentFrame % (fps * 2) === 0); // Keyframe every 2 seconds
+                        
+                        try {
+                            videoEncoder.encode(frame, { keyFrame: isKeyFrame });
+                            frame.close(); // Crucial for memory management
+                        } catch (e) {
+                            console.error("Frame encode error:", e);
+                            showError("Failed to encode frame: " + e.message);
+                            hasError = true;
+                            if (frame) frame.close();
+                            return;
+                        }
+
+                        currentFrame++;
+                    }
+
+                    // Update Progress UI
+                    const progressPct = (currentFrame / totalFrames) * 100;
+                    DOM.exportProgressBar.style.width = `${progressPct}%`;
+                    DOM.exportPercentage.textContent = `${Math.floor(progressPct)}%`;
+
+                    if (currentFrame < totalFrames) {
+                        // Yield to the event loop so UI updates, then process next chunk
+                        setTimeout(processChunk, 5); 
+                    } else {
+                        finalizeEncoding();
+                    }
+                } catch (err) {
+                    console.error("Render loop error:", err);
+                    showError("Render Error: " + err.message);
+                    hasError = true;
+                }
+            };
+
+            const finalizeEncoding = async () => {
+                DOM.exportStatus.textContent = "Finalizing File (Flushing Encoder)...";
+                try {
+                    await videoEncoder.flush();
+                } catch (e) {
+                    console.error("Flush error:", e);
+                    showError("Encoder flush failed: " + e.message);
+                    return;
+                }
+                
+                if (encodedChunkCount === 0) {
+                    showError("Export Error: No frames were successfully encoded. Your browser may not support this video codec configuration.");
+                    DOM.setupScreen.style.display = 'block';
+                    DOM.setupScreen.style.opacity = '1';
+                    DOM.exportScreen.classList.remove('active');
+                    return;
+                }
+
+                try {
+                    muxer.finalize();
+                } catch (e) {
+                    console.error("Muxer finalize error:", e);
+                    showError("Failed to finalize video file: " + e.message);
+                    return;
+                }
+                
+                const { buffer } = muxer.target;
+                const blob = new Blob([buffer], { type: 'video/mp4' });
+                const url = URL.createObjectURL(blob);
+                
+                // Attempt auto-download (appending to body helps bypass some sandbox limits)
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = 'Memorial_Video_1080p.mp4';
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+
+                // Provide a manual download UI for strict sandboxes (like html.onlineviewer.net)
+                DOM.exportScreen.innerHTML = `
+                    <h2 class="font-serif text-3xl text-brandGold mb-4 tracking-wider text-center">Render Complete!</h2>
+                    <p class="text-gray-300 mb-8 text-center px-4 max-w-lg font-body leading-relaxed">If your download didn't start automatically due to the online viewer's security rules, please click the button below to save your file.</p>
+                    <a href="${url}" download="Memorial_Video_1080p.mp4" class="px-8 py-4 bg-brandGold hover:bg-yellow-500 text-black font-serif text-xl tracking-widest transition-all rounded-lg shadow-[0_0_15px_rgba(212,175,55,0.3)] mb-8 text-center flex items-center justify-center font-bold">
+                        DOWNLOAD MP4 VIDEO
+                    </a>
+                    <button onclick="window.location.reload()" class="mt-8 text-gray-500 hover:text-gray-300 text-sm font-body tracking-wider transition-colors underline decoration-gray-600 underline-offset-4">Create Another Video</button>
+                `;
+            };
+
+            // Start processing loop
+            processChunk();
+        }
+    </script>
+</body>
+</html>
